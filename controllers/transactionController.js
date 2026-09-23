@@ -1,8 +1,11 @@
+const mongoose = require("mongoose");
 const Transaction = require("../models/Transaction");
 const InvoiceCounter = require("../models/InvoiceCounter");
 const JobCard = require("../models/JobCard");
 
-/* NORMAL BILL */
+/* =========================================================
+   CREATE NORMAL BILL
+========================================================= */
 exports.createTransaction = async (req, res) => {
   try {
     const transaction = new Transaction({
@@ -10,13 +13,13 @@ exports.createTransaction = async (req, res) => {
       invoiceDate: req.body.invoiceDate,
 
       customer: {
-        name: req.body.customer.customerName,
-        vehicleNo: req.body.customer.vehicleNo,
-        contact: req.body.customer.contactNo,
-        state: req.body.customer.state
+        name: req.body.customer?.customerName || "",
+        vehicleNo: req.body.customer?.vehicleNo || "",
+        contact: req.body.customer?.contactNo || "",
+        state: req.body.customer?.state || ""
       },
 
-      services: (req.body.services || []).map(s => ({
+      services: (req.body.services || []).map((s) => ({
         service: s.name,
         qty: s.qty,
         rate: s.rate,
@@ -26,7 +29,7 @@ exports.createTransaction = async (req, res) => {
         sgstAmount: (s.amount * s.gst) / 200
       })),
 
-      products: (req.body.products || []).map(p => ({
+      products: (req.body.products || []).map((p) => ({
         product: p.name,
         qty: p.qty,
         rate: p.rate,
@@ -37,167 +40,398 @@ exports.createTransaction = async (req, res) => {
       })),
 
       subtotal: req.body.subTotal || req.body.subtotal,
-      cgstTotal: req.body.gstTotal / 2,
-      sgstTotal: req.body.gstTotal / 2,
-      discount: req.body.discount,
-      grandTotal: req.body.grandTotal,
+
+      cgstTotal: Number(req.body.gstTotal || 0) / 2,
+      sgstTotal: Number(req.body.gstTotal || 0) / 2,
+
+      discount: Number(req.body.discount || 0),
+      grandTotal: Number(req.body.grandTotal || 0),
 
       payments: req.body.payment || req.body.payments,
-      totalPaid: req.body.totalPaid,
-      balanceAmount: req.body.balance,
-      paymentStatus: req.body.balance > 0 ? "Pending" : "Paid",
+
+      totalPaid: Number(req.body.totalPaid || 0),
+
+      balanceAmount: Number(req.body.balance || 0),
+
+      paymentStatus:
+        Number(req.body.balance || 0) > 0 ? "Pending" : "Paid",
 
       createdBy: req.user.id
     });
 
     await transaction.save();
+
     res.status(201).json(transaction);
   } catch (err) {
-  console.error("TRANSACTION ERROR 👉", err);
-  res.status(500).json({ 
-    message: err.message || "Transaction failed" 
-  });
-}
+    console.error("TRANSACTION ERROR:", err);
 
+    res.status(500).json({
+      message: err.message || "Transaction failed"
+    });
+  }
 };
 
 
-/*  BILL FROM JOB CARD */
+/* =========================================================
+   CREATE BILL FROM JOB CARD
+========================================================= */
 exports.createTransactionFromJobCard = async (req, res) => {
   try {
-    const jobCard = await JobCard.findById(req.params.jobCardId);
+    const { jobCardId } = req.params;
+
+    // Validate Job Card ID
+    if (!mongoose.Types.ObjectId.isValid(jobCardId)) {
+      return res.status(400).json({
+        message: "Invalid job card ID"
+      });
+    }
+
+    const jobCard = await JobCard.findById(jobCardId);
 
     if (!jobCard) {
-      return res.status(404).json({ message: "Job card not found" });
+      return res.status(404).json({
+        message: "Job card not found"
+      });
     }
 
     if (jobCard.billingStatus === "Billed") {
-      return res.status(400).json({ message: "Already billed" });
+      return res.status(400).json({
+        message: "Already billed"
+      });
     }
 
-    const services = (jobCard.servicesUsed || []).map(s => ({
-  serviceId: s.serviceId || "",
-  service: s.serviceName || s.service || s.name || "",
-  qty: s.qty || 1,
-  rate: s.rate || s.cost || 0,
-  gst: s.gst || 0,
-  amount: (s.qty || 1) * (s.rate || s.cost || 0),
-  cgstAmount: ((s.qty || 1) * (s.rate || s.cost || 0) * ((s.gst || 0) / 2)) / 100,
-  sgstAmount: ((s.qty || 1) * (s.rate || s.cost || 0) * ((s.gst || 0) / 2)) / 100
-}));
+
+    /* -------------------------
+       SERVICES
+    ------------------------- */
+
+    const services = (jobCard.servicesUsed || []).map((s) => {
+      const qty = Number(s.qty || 1);
+      const rate = Number(s.rate || s.cost || 0);
+      const gst = Number(s.gst || 0);
+
+      const amount = qty * rate;
+
+      return {
+        serviceId: s.serviceId || "",
+        service: s.serviceName || s.service || s.name || "",
+        qty,
+        rate,
+        gst,
+        amount,
+
+        cgstAmount: (amount * (gst / 2)) / 100,
+        sgstAmount: (amount * (gst / 2)) / 100
+      };
+    });
 
 
-    const products = (jobCard.productsUsed || []).map(p => ({
-  productId: p.productId || "",
-  product: p.productName || p.product || p.name || "",
-  qty: p.qty || 1,
-  rate: p.rate || p.sale || 0,
-  gst: p.gst || 0,
-  amount: (p.qty || 1) * (p.rate || p.sale || 0),
-  cgstAmount: ((p.qty || 1) * (p.rate || p.sale || 0) * ((p.gst || 0) / 2)) / 100,
-  sgstAmount: ((p.qty || 1) * (p.rate || p.sale || 0) * ((p.gst || 0) / 2)) / 100
-}));
+    /* -------------------------
+       PRODUCTS
+    ------------------------- */
 
+    const products = (jobCard.productsUsed || []).map((p) => {
+      const qty = Number(p.qty || 1);
+      const rate = Number(p.rate || p.sale || 0);
+      const gst = Number(p.gst || 0);
+
+      const amount = qty * rate;
+
+      return {
+        productId: p.productId || "",
+        product: p.productName || p.product || p.name || "",
+        qty,
+        rate,
+        gst,
+        amount,
+
+        cgstAmount: (amount * (gst / 2)) / 100,
+        sgstAmount: (amount * (gst / 2)) / 100
+      };
+    });
+
+
+    /* -------------------------
+       TOTALS
+    ------------------------- */
 
     const subtotal =
-  services.reduce((a, s) => a + s.amount, 0) +
-  products.reduce((a, p) => a + p.amount, 0);
+      services.reduce((total, s) => total + s.amount, 0) +
+      products.reduce((total, p) => total + p.amount, 0);
 
-const cgstTotal =
-  services.reduce((a, s) => a + s.cgstAmount, 0) +
-  products.reduce((a, p) => a + p.cgstAmount, 0);
+    const cgstTotal =
+      services.reduce((total, s) => total + s.cgstAmount, 0) +
+      products.reduce((total, p) => total + p.cgstAmount, 0);
 
-const sgstTotal =
-  services.reduce((a, s) => a + s.sgstAmount, 0) +
-  products.reduce((a, p) => a + p.sgstAmount, 0);
+    const sgstTotal =
+      services.reduce((total, s) => total + s.sgstAmount, 0) +
+      products.reduce((total, p) => total + p.sgstAmount, 0);
 
-const discount = Number(req.body.discount ?? 0);
+    const discount = Number(req.body.discount || 0);
 
-const grandTotal = subtotal + cgstTotal + sgstTotal - discount;
+    const grandTotal =
+      subtotal +
+      cgstTotal +
+      sgstTotal -
+      discount;
 
-const totalPaid =
-  Number(req.body.payments?.cash || 0) +
-  Number(req.body.payments?.upi || 0) +
-  Number(req.body.payments?.credit || 0);
 
-const balanceAmount = grandTotal - totalPaid;
+    /* -------------------------
+       PAYMENTS
+    ------------------------- */
+
+    const payments = req.body.payments || {
+      cash: 0,
+      upi: 0,
+      credit: 0
+    };
+
+    const totalPaid =
+      Number(payments.cash || 0) +
+      Number(payments.upi || 0) +
+      Number(payments.credit || 0);
+
+    const balanceAmount = grandTotal - totalPaid;
+
+
+    /* -------------------------
+       CREATE TRANSACTION
+    ------------------------- */
 
     const transaction = new Transaction({
-  invoiceNo: req.body.invoiceNo,
-  invoiceDate: new Date(),
-  jobCardId: jobCard._id,
+      invoiceNo: req.body.invoiceNo,
 
-  customer: {
-    id: jobCard.customerId || "",
-    name: jobCard.customerName,
-    vehicleNo: jobCard.vehicleNo,
-    contact: jobCard.contactNo,
-    state: jobCard.state || ""
-  },
+      invoiceDate: new Date(),
 
-  services,
-  products,
+      jobCardId: jobCard._id,
 
-  subtotal,
-  cgstTotal,
-  sgstTotal,
-  discount,
-  grandTotal,
+      customer: {
+        id: jobCard.customerId || "",
+        name: jobCard.customerName || "",
+        vehicleNo: jobCard.vehicleNo || "",
+        contact: jobCard.contactNo || "",
+        state: jobCard.state || ""
+      },
 
-  payments: req.body.payments || { cash: 0, upi: 0, credit: 0 },
-  totalPaid: totalPaid,
-balanceAmount: balanceAmount,
-paymentStatus: balanceAmount > 0 ? "Pending" : "Paid",
+      services,
+      products,
 
+      subtotal,
+      cgstTotal,
+      sgstTotal,
 
-  createdBy: req.user.id
-});
+      discount,
+      grandTotal,
+
+      payments,
+
+      totalPaid,
+      balanceAmount,
+
+      paymentStatus:
+        balanceAmount > 0 ? "Pending" : "Paid",
+
+      createdBy: req.user.id
+    });
 
 
     await transaction.save();
 
+
+    /* -------------------------
+       UPDATE JOB CARD
+    ------------------------- */
+
     jobCard.billingStatus = "Billed";
     jobCard.transactionId = transaction._id;
+
     await jobCard.save();
+
+
+    /* -------------------------
+       UPDATE INVOICE COUNTER
+    ------------------------- */
 
     await InvoiceCounter.findOneAndUpdate(
       { name: "invoice" },
-      { $inc: { seq: 1 } }
+      { $inc: { seq: 1 } },
+      { upsert: true }
     );
 
+
     res.status(201).json(transaction);
+
   } catch (err) {
-  console.error("TRANSACTION ERROR 👉", err);
-  res.status(500).json({ 
-    message: err.message || "Billing failed" 
-  });
-}
+    console.error("TRANSACTION ERROR:", err);
 
+    res.status(500).json({
+      message: err.message || "Billing failed"
+    });
+  }
 };
 
 
-/* REST (UNCHANGED) */
+/* =========================================================
+   GET ALL TRANSACTIONS
+========================================================= */
 exports.getAllTransactions = async (req, res) => {
-  const data = await Transaction.find().sort({ createdAt: -1 });
-  res.json(data);
+  try {
+    const data = await Transaction
+      .find()
+      .sort({ createdAt: -1 });
+
+    res.status(200).json(data);
+
+  } catch (err) {
+    console.error("GET ALL TRANSACTIONS ERROR:", err);
+
+    res.status(500).json({
+      message: "Failed to fetch transactions"
+    });
+  }
 };
 
+
+/* =========================================================
+   GET TRANSACTION BY ID
+========================================================= */
 exports.getTransactionById = async (req, res) => {
-  const bill = await Transaction.findById(req.params.id);
-  res.json(bill);
+  try {
+    const { id } = req.params;
+
+
+    // IMPORTANT:
+    // Prevent "Cast to ObjectId failed" errors
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        message: "Invalid transaction ID"
+      });
+    }
+
+
+    const bill = await Transaction.findById(id);
+
+
+    if (!bill) {
+      return res.status(404).json({
+        message: "Transaction not found"
+      });
+    }
+
+
+    res.status(200).json(bill);
+
+  } catch (err) {
+    console.error("GET TRANSACTION ERROR:", err);
+
+    res.status(500).json({
+      message: "Failed to fetch transaction"
+    });
+  }
 };
 
+
+/* =========================================================
+   GET MY TRANSACTIONS
+========================================================= */
 exports.getMyTransactions = async (req, res) => {
-  const bills = await Transaction.find({ createdBy: req.user.id });
-  res.json(bills);
+  try {
+    const bills = await Transaction
+      .find({
+        createdBy: req.user.id
+      })
+      .sort({ createdAt: -1 });
+
+    res.status(200).json(bills);
+
+  } catch (err) {
+    console.error("GET MY TRANSACTIONS ERROR:", err);
+
+    res.status(500).json({
+      message: "Failed to fetch your transactions"
+    });
+  }
 };
 
+
+/* =========================================================
+   UPDATE TRANSACTION
+========================================================= */
 exports.updateTransaction = async (req, res) => {
-  const updated = await Transaction.findByIdAndUpdate(req.params.id, req.body, { new: true });
-  res.json(updated);
+  try {
+    const { id } = req.params;
+
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        message: "Invalid transaction ID"
+      });
+    }
+
+
+    const updated = await Transaction.findByIdAndUpdate(
+      id,
+      req.body,
+      {
+        new: true,
+        runValidators: true
+      }
+    );
+
+
+    if (!updated) {
+      return res.status(404).json({
+        message: "Transaction not found"
+      });
+    }
+
+
+    res.status(200).json(updated);
+
+  } catch (err) {
+    console.error("UPDATE TRANSACTION ERROR:", err);
+
+    res.status(500).json({
+      message: "Failed to update transaction"
+    });
+  }
 };
 
+
+/* =========================================================
+   DELETE TRANSACTION
+========================================================= */
 exports.deleteTransaction = async (req, res) => {
-  await Transaction.findByIdAndDelete(req.params.id);
-  res.json({ message: "Deleted" });
+  try {
+    const { id } = req.params;
+
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        message: "Invalid transaction ID"
+      });
+    }
+
+
+    const deleted = await Transaction.findByIdAndDelete(id);
+
+
+    if (!deleted) {
+      return res.status(404).json({
+        message: "Transaction not found"
+      });
+    }
+
+
+    res.status(200).json({
+      message: "Transaction deleted successfully"
+    });
+
+  } catch (err) {
+    console.error("DELETE TRANSACTION ERROR:", err);
+
+    res.status(500).json({
+      message: "Failed to delete transaction"
+    });
+  }
 };
